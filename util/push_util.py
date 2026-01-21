@@ -5,6 +5,72 @@ from datetime import datetime
 import pytz
 
 
+def parse_push_hours(push_hour_config):
+    """解析推送时间配置，支持多种格式：
+    1. 单个数字：'21'
+    2. 逗号分隔：'20,21'
+    3. JSON数组：[20, 21]
+    4. 整数：21
+    """
+    if not push_hour_config:
+        return [21]  # 默认值
+    
+    push_hours = []
+    
+    if isinstance(push_hour_config, str):
+        # 尝试解析逗号分隔的字符串
+        if ',' in push_hour_config:
+            parts = push_hour_config.split(',')
+            for part in parts:
+                part = part.strip()
+                if part.isdigit():
+                    hour = int(part)
+                    if 0 <= hour <= 23:
+                        push_hours.append(hour)
+        # 单个数字字符串
+        elif push_hour_config.isdigit():
+            hour = int(push_hour_config)
+            if 0 <= hour <= 23:
+                push_hours.append(hour)
+        # 尝试解析JSON数组格式
+        elif push_hour_config.startswith('[') and push_hour_config.endswith(']'):
+            try:
+                import json
+                hours_list = json.loads(push_hour_config)
+                if isinstance(hours_list, list):
+                    for hour in hours_list:
+                        if isinstance(hour, (int, str)):
+                            try:
+                                hour_int = int(hour)
+                                if 0 <= hour_int <= 23:
+                                    push_hours.append(hour_int)
+                            except ValueError:
+                                pass
+            except:
+                pass
+    elif isinstance(push_hour_config, int):
+        if 0 <= push_hour_config <= 23:
+            push_hours.append(push_hour_config)
+    elif isinstance(push_hour_config, list):
+        for hour in push_hour_config:
+            if isinstance(hour, (int, str)):
+                try:
+                    hour_int = int(hour)
+                    if 0 <= hour_int <= 23:
+                        push_hours.append(hour_int)
+                except ValueError:
+                    pass
+    
+    # 去重排序
+    push_hours = sorted(set(push_hours))
+    
+    # 如果解析失败，使用默认值
+    if not push_hours:
+        push_hours = [21]
+    
+    return push_hours
+
+
 def get_beijing_time():
     """获取北京时间"""
     target_timezone = pytz.timezone('Asia/Shanghai')
@@ -145,38 +211,40 @@ def push_results(exec_results, summary, config: PushConfig):
 
 
 def not_in_push_time_range(config: PushConfig) -> bool:
-    """检查是否在推送时间范围内"""
+    """检查是否在推送时间范围内，支持多时间点"""
     if not config.push_plus_hour:
         return False  # 如果没有设置推送时间，则总是推送
 
     time_bj = get_beijing_time()
+    current_hour = time_bj.hour
 
-    # 首先根据时间判断，如果匹配 直接返回
-    if config.push_plus_hour.isdigit():
-        if time_bj.hour == int(config.push_plus_hour):
-            print(f"当前设置推送整点为：{config.push_plus_hour}, 当前整点为：{time_bj.hour}，执行推送")
-            return False
+    # 解析推送时间配置
+    push_hours = parse_push_hours(config.push_plus_hour)
+    
+    # 使用 in 运算符检查当前小时是否在推送时间列表中
+    if current_hour in push_hours:
+        print(f"当前设置推送整点为：{push_hours}, 当前整点为：{current_hour}，执行推送")
+        return False
 
     # 如果时间不匹配，检查cron_change_time文件中的记录
-    # 读取cron_change_time文件中的最后一行数据：“next exec time: UTC(7:35) 北京时间(15:35)” 中的整点数
-    # 然后用来对比是否当前时间，避免因为Actions执行延迟导致推送失效
     try:
         with open('cron_change_time', 'r') as f:
             lines = f.readlines()
             if lines:
                 last_line = lines[-1].strip()
-                # 提取北京时间的小时数
                 import re
                 match = re.search(r'北京时间\(0?(\d+):\d+\)', last_line)
                 if match:
                     cron_hour = int(match.group(1))
-                    if int(config.push_plus_hour) == cron_hour:
-                        print(
-                            f"当前设置推送整点为：{config.push_plus_hour}, 根据执行记录，本次执行整点为：{cron_hour}，执行推送")
+                    # 改为检查是否在列表中
+                    if cron_hour in push_hours:
+                        print(f"当前设置推送整点为：{push_hours}, 根据执行记录，本次执行整点为：{cron_hour}，执行推送")
                         return False
     except Exception as e:
         print(f"读取cron_change_time文件出错: {e}")
-    print(f"当前整点时间为：{time_bj}，不在配置的推送时间，不执行推送")
+    
+    # 修复打印语句
+    print(f"当前时间为：{format_now()}，当前小时：{current_hour}:00，不在配置的推送时间 {push_hours}，不执行推送")
     return True
 
 
